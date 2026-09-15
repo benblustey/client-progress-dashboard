@@ -1,10 +1,10 @@
 # Client Progress Dashboard
 
 A read-only, single-page Next.js dashboard that visualizes a client's onboarding
-checklist and project phases as a milestone flow. Each deployment points at exactly
-one client's Google Sheet (via `SPREADSHEET_ID`), matching the
-`Client_Onboarding_Checklist_Template.xlsx` workbook's "Checklist Template" and
-"Phases" tabs.
+checklist progress and project phases (with their sub-tasks). Each deployment
+points at exactly one client's Google Sheet (via `SPREADSHEET_ID`), matching the
+`Client_Onboarding_Checklist_Template.xlsx` workbook's "Checklist Template",
+"Phases", and "Phase Tasks" tabs.
 
 Data flows one way: Google Sheet → this app. Nothing here writes back to the sheet.
 There is no login yet — this first version is meant to sit behind an unlisted URL
@@ -13,16 +13,25 @@ until Pocket ID (or another OIDC provider) is layered on in a later pass.
 ## How it works
 
 - `lib/sheets.ts` runs only on the server. It authenticates to the Google Sheets API
-  with a service account, reads the two tabs, and parses them into the shapes in
-  `lib/types.ts`. It looks for header rows ("Category"/"Item"/"Status" and
-  "Phase"/"Status") rather than hardcoded cell coordinates, so it keeps working even
-  if rows are added or reordered in the sheet — but the column headers themselves
-  must match the template.
+  with a service account, reads the three tabs, and parses them into the shapes in
+  `lib/types.ts`. It looks for header rows ("Category"/"Item"/"Status",
+  "Phase"/"Status", and "Phase"/"Sub-task"/"Status") rather than hardcoded cell
+  coordinates, so it keeps working even if rows are added or reordered in the sheet
+  — but the column headers themselves must match the template. The "Phase Tasks"
+  tab is optional: if it's missing (e.g. an older client sheet from before this
+  feature existed), phases just render with no sub-tasks instead of erroring.
 - `app/page.tsx` is a Server Component that calls `getDashboardData()` at request
   time, cached for 60 seconds (`export const revalidate = 60`) so the Sheets API
-  isn't hit on every page view.
-- `components/MilestoneFlow.tsx` renders the Intake Checklist (as a percentage) and
-  the five project phases as a connected stepper.
+  isn't hit on every page view. It also figures out the "current" phase (the first
+  one not marked Complete) and tells `MilestoneFlow` to auto-expand it.
+- `components/MilestoneFlow.tsx` renders the Intake Checklist (as a percentage)
+  and the five project phases as a connected stepper. Clicking a phase node
+  toggles a panel showing that phase's sub-tasks (from the "Phase Tasks" tab),
+  each with its own Not Started / In Progress / Completed status. The phase right
+  after the last completed one is expanded by default on load.
+- `components/CategoryBreakdown.tsx` renders the intake checklist's category
+  rollups as a card grid; clicking a category expands it to show the individual
+  checklist items in that category and their status.
 - `components/ThemeToggle.tsx` + the inline script in `app/layout.tsx` handle
   light/dark mode, stored in the browser's `localStorage` — no server-side
   preference, no cookie banner needed.
@@ -44,12 +53,13 @@ until Pocket ID (or another OIDC provider) is layered on in a later pass.
 ## Local development
 
 ```bash
-npm install
+pnpm install
 cp .env.example .env.local   # then fill in the values
-npm run dev
+pnpm run dev
 ```
 
-Visit `http://localhost:3000`.
+Visit `http://localhost:3000`. `pnpm run lint` runs ESLint (Next.js 16 removed the
+built-in `next lint` command); `pnpm run build` does a production build.
 
 ## Deploying on Coolify
 
@@ -85,3 +95,6 @@ Nothing here assumes no-auth forever — when you're ready:
   is added.
 - If a category or phase name is edited in the sheet, this app just reflects
   whatever text is there — it doesn't validate against the original template.
+- Sub-tasks on the "Phase Tasks" tab are matched to a phase by exact name text —
+  a typo or a renamed phase on the "Phases" tab will silently orphan that phase's
+  sub-tasks instead of erroring.
