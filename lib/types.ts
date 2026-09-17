@@ -1,36 +1,24 @@
-export type ChecklistStatus = "Not Started" | "Requested" | "Received" | "N/A";
+// Unified status vocabulary shared by every leaf node in the tree, whether it
+// started life as a checklist item, a phase, or a phase sub-task. "N/A" means
+// "doesn't apply to this project" and is excluded from rollup percentages.
+export type Status = "Not Started" | "In Progress" | "Completed" | "Blocked" | "N/A";
 
-export type PhaseStatus = "Not Started" | "In Progress" | "Complete" | "Blocked";
+// The coarser state a *non-leaf* node is displayed in, computed by rolling up
+// its leaf descendants (see lib/tree.ts). Kept separate from Status because a
+// list node never has its own Status cell in the sheet — its state is always
+// derived, never entered directly.
+export type RollupState = "complete" | "active" | "blocked" | "upcoming";
 
-export type SubtaskStatus = "Not Started" | "In Progress" | "Completed";
-
-export interface ChecklistItem {
-  category: string;
-  item: string;
-  status: ChecklistStatus | string;
+// One row of the "Project Tree" sheet tab, and one node of the tree it builds.
+// A node with an empty `children` array is a leaf (has a Status); a node with
+// one or more children is a list (its status is always a computed rollup).
+export interface TreeNode {
+  id: string;
+  parentId: string;
+  title: string;
+  status: Status | string;
   notes: string;
-  dateReceived: string;
-  owner: string;
-}
-
-export interface CategorySummary {
-  category: string;
-  total: number;
-  done: number;
-}
-
-export interface PhaseTask {
-  name: string;
-  status: SubtaskStatus | string;
-}
-
-export interface Phase {
-  name: string;
-  status: PhaseStatus | string;
-  startDate: string;
-  completeDate: string;
-  notes: string;
-  tasks: PhaseTask[];
+  children: TreeNode[];
 }
 
 export interface ClientInfo {
@@ -46,9 +34,8 @@ export interface ClientInfo {
 
 export interface DashboardData {
   client: ClientInfo;
-  items: ChecklistItem[];
-  categories: CategorySummary[];
-  percentComplete: number;
-  phases: Phase[];
+  // Top-level branches of the tree, e.g. "Intake Checklist" and
+  // "Project Phases". Row order in the sheet controls order here.
+  roots: TreeNode[];
   fetchedAt: string;
 }

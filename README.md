@@ -1,37 +1,82 @@
 # Client Progress Dashboard
 
-A read-only, single-page Next.js dashboard that visualizes a client's onboarding
-checklist progress and project phases (with their sub-tasks). Each deployment
-points at exactly one client's Google Sheet (via `SPREADSHEET_ID`), matching the
-`Client_Onboarding_Checklist_Template.xlsx` workbook's "Checklist Template",
-"Phases", and "Phase Tasks" tabs.
+A read-only, single-page Next.js dashboard that visualizes a client's project
+as one nested tree — an intake checklist, project phases, and any sub-tasks
+under either, at whatever depth the sheet defines. Each deployment points at
+exactly one client's Google Sheet (via `SPREADSHEET_ID`), matching the
+`Client_Onboarding_Checklist_Template.xlsx` workbook's single "Project Tree" tab.
 
 Data flows one way: Google Sheet → this app. Nothing here writes back to the sheet.
 There is no login yet — this first version is meant to sit behind an unlisted URL
 until Pocket ID (or another OIDC provider) is layered on in a later pass.
 
+## The tree data model
+
+Everything on the "Project Tree" tab is one row of `ID, ParentID, Title, Status, Notes`.
+A row with children (i.e. other rows list it as their ParentID) is a **list**;
+a row with no children is a **task**, and it's the only kind of row that
+carries a real Status. A list's displayed status is always a computed
+rollup over its leaf (task) descendants — you never set a list's status by hand.
+
+- `ID` — a short, unique-per-sheet slug you choose, e.g. `access`,
+  `access-domain`, `phase1-define`. Referenced by child rows as their `ParentID`.
+- `ParentID` — the `ID` of the row this one nests under. Blank means it's a
+  top-level branch (a "root"), like `Intake Checklist` or `Project Phases`.
+- `Title` — what's shown on the dashboard.
+- `Status` — one of `Not Started`, `In Progress`, `Completed`, `Blocked`,
+  `N/A`. Leave blank on any row that has children (it's ignored either way —
+  the dashboard always computes a list's status from its descendants).
+  `N/A` tasks are excluded from rollup percentages entirely.
+- `Notes` — optional, not currently shown on the dashboard but read and kept
+  available for a future pass.
+
+Because nesting is by ID reference rather than row position, you can insert,
+reorder, or move rows anywhere on the tab without breaking the structure —
+only the `ID`/`ParentID` relationship matters, and row order just controls
+display order among siblings.
+
+The root named exactly `Intake Checklist` and the root named exactly
+`Project Phases` are special-cased into one combined section: the Intake
+Checklist root itself becomes the first step, followed by each of
+`Project Phases`'s direct children as the remaining steps. Rather than the
+generic accordion, that combined step list renders as both a horizontal
+connected-dot stepper and a full row list of the same steps underneath it,
+kept in sync (see below). Any other root — and everything nested more than
+one level inside a step — uses the generic tree view.
+
 ## How it works
 
-- `lib/sheets.ts` runs only on the server. It authenticates to the Google Sheets API
-  with a service account, reads the three tabs, and parses them into the shapes in
-  `lib/types.ts`. It looks for header rows ("Category"/"Item"/"Status",
-  "Phase"/"Status", and "Phase"/"Sub-task"/"Status") rather than hardcoded cell
-  coordinates, so it keeps working even if rows are added or reordered in the sheet
-  — but the column headers themselves must match the template. The "Phase Tasks"
-  tab is optional: if it's missing (e.g. an older client sheet from before this
-  feature existed), phases just render with no sub-tasks instead of erroring.
-- `app/page.tsx` is a Server Component that calls `getDashboardData()` at request
-  time, cached for 60 seconds (`export const revalidate = 60`) so the Sheets API
-  isn't hit on every page view. It also figures out the "current" phase (the first
-  one not marked Complete) and tells `MilestoneFlow` to auto-expand it.
-- `components/MilestoneFlow.tsx` renders the Intake Checklist (as a percentage)
-  and the five project phases as a connected stepper. Clicking a phase node
-  toggles a panel showing that phase's sub-tasks (from the "Phase Tasks" tab),
-  each with its own Not Started / In Progress / Completed status. The phase right
-  after the last completed one is expanded by default on load.
-- `components/CategoryBreakdown.tsx` renders the intake checklist's category
-  rollups as a card grid; clicking a category expands it to show the individual
-  checklist items in that category and their status.
+- `lib/sheets.ts` runs only on the server. It authenticates to the Google
+  Sheets API with a service account and reads the single "Project Tree" tab
+  into flat rows. It looks for a header row containing `ID`/`ParentID`/`Title`/`Status`
+  rather than hardcoded cell coordinates, so it keeps working even if rows are
+  added or reordered.
+- `lib/tree.ts` turns those flat rows into the actual node tree (`buildTree`)
+  and computes each list node's rollup status (`computeRollup`). A row whose
+  `ParentID` doesn't match any real row's `ID` — a typo, or two rows that
+  point at each other — gets filed under a synthetic
+  "⚠ Unlinked rows (check ParentID)" root instead of silently vanishing from
+  the dashboard; check the server logs for which row and why.
+- `app/page.tsx` is a Server Component that calls `getDashboardData()` at
+  request time, cached for 60 seconds (`export const revalidate = 60`). It
+  builds the combined step list — `Intake Checklist` first, then each of
+  `Project Phases`'s children — and renders it with `Stepper`; any other root
+  gets its own titled section rendered with `TreeAccordion`.
+- `components/Stepper.tsx` renders that step list twice, in sync: a
+  horizontal connected-dot stepper on top, and a full row list of the same
+  steps underneath — every step is always visible as a row, not just the
+  open ones. Clicking a dot and clicking its row both toggle the exact same
+  shared open/closed state, so either one expands that step's children in
+  place (a step can itself contain nested lists, to whatever depth the sheet
+  defines). The first step that isn't yet fully complete is expanded by
+  default on load; if every step is complete, the last one is.
+- `components/TreeAccordion.tsx` is the generic recursive tree: leaves show
+  their entered status, list nodes show a computed rollup (`x/y` complete,
+  percent) and expand to reveal their children. Its default export owns its
+  own expand/collapse state and is used for any other (non-stepper) top-level
+  section; it also exports `TreeLevel`, the underlying recursive renderer,
+  which `Stepper` reuses directly so the dots and the row list can share one
+  state instead of each getting its own out-of-sync copy.
 - `components/ThemeToggle.tsx` + the inline script in `app/layout.tsx` handle
   light/dark mode, stored in the browser's `localStorage` — no server-side
   preference, no cookie banner needed.
@@ -49,6 +94,26 @@ until Pocket ID (or another OIDC provider) is layered on in a later pass.
 4. **Configure this app**: copy `.env.example` to `.env.local` and fill in
    `SPREADSHEET_ID` plus the service account credentials (base64 the whole JSON key
    is the easiest path — see the comment in `.env.example`).
+
+## Migrating an existing client sheet from the old 3-tab format
+
+If a client's sheet still has the old "Checklist Template" / "Phases" /
+"Phase Tasks" tabs from before this rework, it needs a one-time manual
+restructure into the single "Project Tree" tab:
+
+1. Add a new "Project Tree" tab with header row `ID | ParentID | Title | Status | Notes`.
+2. Keep the client info block (Client Name:, Project Name:, etc.) at the top,
+   same as before.
+3. Add one root row per old top section: `checklist` → "Intake Checklist",
+   `phases` → "Project Phases" (both `ParentID` blank).
+4. For each old checklist Category, add a row with `ParentID=checklist`; for
+   each Item under it, add a row with `ParentID` set to that category's `ID`
+   and carry its old Status across, translating the old vocabulary as you go
+   (old `Received`/`N/A` → new `Completed`/`N/A`; old `Requested` → `In Progress`).
+5. For each old Phase, add a row with `ParentID=phases`, carrying its old
+   Status across (`Complete` → `Completed`). For each old Phase Task under
+   it, add a row with `ParentID` set to that phase's `ID`.
+6. Delete the three old tabs once the new tab looks right.
 
 ## Local development
 
@@ -93,8 +158,11 @@ Nothing here assumes no-auth forever — when you're ready:
 - One sheet per deployment; there's no multi-client picker in the UI.
 - No auth yet — treat the deployed URL as unlisted, not public, until Pocket ID
   is added.
-- If a category or phase name is edited in the sheet, this app just reflects
+- If a row's `Title` is edited in the sheet, the dashboard just reflects
   whatever text is there — it doesn't validate against the original template.
-- Sub-tasks on the "Phase Tasks" tab are matched to a phase by exact name text —
-  a typo or a renamed phase on the "Phases" tab will silently orphan that phase's
-  sub-tasks instead of erroring.
+- `ID` values must stay unique across the entire tab (both branches share one
+  namespace) — a duplicate is silently ignored (first occurrence wins) other
+  than a warning in the server logs.
+- A row whose `ParentID` doesn't resolve to a real `ID` gets filed under a
+  visible "⚠ Unlinked rows" section rather than causing an error, so a typo
+  is noticeable on the dashboard itself, not just in server logs.

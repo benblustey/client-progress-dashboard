@@ -1,17 +1,9 @@
 import { google } from "googleapis";
-import type {
-  CategorySummary,
-  ChecklistItem,
-  ClientInfo,
-  DashboardData,
-  Phase,
-  PhaseTask,
-} from "./types";
+import type { ClientInfo, DashboardData } from "./types";
+import { buildTree, type TreeRow } from "./tree";
 
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID ?? "";
-const CHECKLIST_SHEET_NAME = process.env.CHECKLIST_SHEET_NAME ?? "Checklist Template";
-const PHASES_SHEET_NAME = process.env.PHASES_SHEET_NAME ?? "Phases";
-const PHASE_TASKS_SHEET_NAME = process.env.PHASE_TASKS_SHEET_NAME ?? "Phase Tasks";
+const TREE_SHEET_NAME = process.env.TREE_SHEET_NAME ?? "Project Tree";
 
 /**
  * Builds an authenticated Sheets client from a service account.
@@ -64,22 +56,11 @@ async function fetchSheetGrid(sheetName: string): Promise<Grid> {
   const sheets = await getSheetsClient();
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
-    range: `'${sheetName}'!A1:Z200`,
+    range: `'${sheetName}'!A1:Z500`,
     valueRenderOption: "FORMATTED_VALUE",
   });
   const rows = res.data.values ?? [];
   return rows.map((row) => row.map((cell) => (cell ?? "").toString()));
-}
-
-// Phase sub-tasks live on a tab that older client spreadsheets (set up before
-// this feature existed) won't have yet. Missing it shouldn't break the whole
-// dashboard — phases just render with no sub-tasks until that tab is added.
-async function fetchSheetGridOptional(sheetName: string): Promise<Grid> {
-  try {
-    return await fetchSheetGrid(sheetName);
-  } catch {
-    return [];
-  }
 }
 
 function findHeaderRow(grid: Grid, requiredHeaders: string[]): number {
@@ -96,6 +77,9 @@ function colIndex(headerRow: string[], name: string): number {
   return headerRow.findIndex((h) => h.trim() === name);
 }
 
+// The client info block (Client Name:, Project Name:, etc.) sits above the
+// ID/ParentID/Title/Status/Notes table on the same tab — scan the whole grid
+// for "Label:" / value cell pairs rather than assuming fixed coordinates.
 function parseClientInfo(grid: Grid): ClientInfo {
   const labels: Record<string, string> = {};
   for (const row of grid) {
@@ -121,128 +105,42 @@ function parseClientInfo(grid: Grid): ClientInfo {
   };
 }
 
-function parseChecklist(grid: Grid): { items: ChecklistItem[]; client: ClientInfo } {
-  const client = parseClientInfo(grid);
-
-  const headerRowIdx = findHeaderRow(grid, ["Category", "Item", "Status"]);
-  if (headerRowIdx === -1) {
-    return { items: [], client };
-  }
-  const header = grid[headerRowIdx];
-  const iCategory = colIndex(header, "Category");
-  const iItem = colIndex(header, "Item");
-  const iStatus = colIndex(header, "Status");
-  const iNotes = colIndex(header, "Notes");
-  const iDate = colIndex(header, "Date Received");
-  const iOwner = colIndex(header, "Owner");
-
-  const items: ChecklistItem[] = [];
-  for (let r = headerRowIdx + 1; r < grid.length; r++) {
-    const row = grid[r];
-    const category = (row[iCategory] ?? "").trim();
-    const item = (row[iItem] ?? "").trim();
-    if (!category && !item) continue; // stop-ish, but keep scanning in case of gaps
-    if (!item) continue;
-    items.push({
-      category,
-      item,
-      status: (row[iStatus] ?? "Not Started").trim() || "Not Started",
-      notes: (row[iNotes] ?? "").trim(),
-      dateReceived: (row[iDate] ?? "").trim(),
-      owner: (row[iOwner] ?? "").trim(),
-    });
-  }
-  return { items, client };
-}
-
-function parsePhases(grid: Grid): Phase[] {
-  const headerRowIdx = findHeaderRow(grid, ["Phase", "Status"]);
+function parseTreeRows(grid: Grid): TreeRow[] {
+  const headerRowIdx = findHeaderRow(grid, ["ID", "ParentID", "Title", "Status"]);
   if (headerRowIdx === -1) return [];
   const header = grid[headerRowIdx];
-  const iPhase = colIndex(header, "Phase");
+  const iId = colIndex(header, "ID");
+  const iParent = colIndex(header, "ParentID");
+  const iTitle = colIndex(header, "Title");
   const iStatus = colIndex(header, "Status");
-  const iStart = colIndex(header, "Start Date");
-  const iComplete = colIndex(header, "Complete Date");
   const iNotes = colIndex(header, "Notes");
 
-  const phases: Phase[] = [];
+  const rows: TreeRow[] = [];
   for (let r = headerRowIdx + 1; r < grid.length; r++) {
     const row = grid[r];
-    const name = (row[iPhase] ?? "").trim();
-    if (!name) continue;
-    phases.push({
-      name,
-      status: (row[iStatus] ?? "Not Started").trim() || "Not Started",
-      startDate: (row[iStart] ?? "").trim(),
-      completeDate: (row[iComplete] ?? "").trim(),
-      notes: (row[iNotes] ?? "").trim(),
-      tasks: [],
+    const id = (row[iId] ?? "").trim();
+    const title = (row[iTitle] ?? "").trim();
+    if (!id && !title) continue;
+    rows.push({
+      id,
+      parentId: (row[iParent] ?? "").trim(),
+      title,
+      status: (row[iStatus] ?? "").trim(),
+      notes: iNotes === -1 ? "" : (row[iNotes] ?? "").trim(),
     });
   }
-  return phases;
-}
-
-// Sub-tasks live on their own tab ("Phase Tasks" by default) shaped like the
-// checklist: one row per sub-task, referencing its parent phase by name.
-function parsePhaseTasks(grid: Grid): Map<string, PhaseTask[]> {
-  const byPhase = new Map<string, PhaseTask[]>();
-  const headerRowIdx = findHeaderRow(grid, ["Phase", "Sub-task", "Status"]);
-  if (headerRowIdx === -1) return byPhase;
-  const header = grid[headerRowIdx];
-  const iPhase = colIndex(header, "Phase");
-  const iTask = colIndex(header, "Sub-task");
-  const iStatus = colIndex(header, "Status");
-
-  for (let r = headerRowIdx + 1; r < grid.length; r++) {
-    const row = grid[r];
-    const phaseName = (row[iPhase] ?? "").trim();
-    const taskName = (row[iTask] ?? "").trim();
-    if (!phaseName || !taskName) continue;
-    const task: PhaseTask = {
-      name: taskName,
-      status: (row[iStatus] ?? "Not Started").trim() || "Not Started",
-    };
-    if (!byPhase.has(phaseName)) byPhase.set(phaseName, []);
-    byPhase.get(phaseName)!.push(task);
-  }
-  return byPhase;
-}
-
-function summarizeCategories(items: ChecklistItem[]): CategorySummary[] {
-  const map = new Map<string, CategorySummary>();
-  for (const item of items) {
-    const key = item.category || "Uncategorized";
-    if (!map.has(key)) map.set(key, { category: key, total: 0, done: 0 });
-    const entry = map.get(key)!;
-    entry.total += 1;
-    if (item.status === "Received" || item.status === "N/A") entry.done += 1;
-  }
-  return Array.from(map.values());
+  return rows;
 }
 
 export async function getDashboardData(): Promise<DashboardData> {
-  const [checklistGrid, phasesGrid, phaseTasksGrid] = await Promise.all([
-    fetchSheetGrid(CHECKLIST_SHEET_NAME),
-    fetchSheetGrid(PHASES_SHEET_NAME),
-    fetchSheetGridOptional(PHASE_TASKS_SHEET_NAME),
-  ]);
-
-  const { items, client } = parseChecklist(checklistGrid);
-  const categories = summarizeCategories(items);
-  const doneCount = items.filter((i) => i.status === "Received" || i.status === "N/A").length;
-  const percentComplete = items.length > 0 ? Math.round((doneCount / items.length) * 100) : 0;
-  const phaseTasksByPhase = parsePhaseTasks(phaseTasksGrid);
-  const phases = parsePhases(phasesGrid).map((phase) => ({
-    ...phase,
-    tasks: phaseTasksByPhase.get(phase.name) ?? [],
-  }));
+  const grid = await fetchSheetGrid(TREE_SHEET_NAME);
+  const client = parseClientInfo(grid);
+  const rows = parseTreeRows(grid);
+  const roots = buildTree(rows);
 
   return {
     client,
-    items,
-    categories,
-    percentComplete,
-    phases,
+    roots,
     fetchedAt: new Date().toISOString(),
   };
 }

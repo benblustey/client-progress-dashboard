@@ -1,6 +1,7 @@
 import { getDashboardData } from "@/lib/sheets";
-import MilestoneFlow from "@/components/MilestoneFlow";
-import CategoryBreakdown from "@/components/CategoryBreakdown";
+import { INTAKE_ROOT_TITLE, PHASES_ROOT_TITLE } from "@/lib/tree";
+import Stepper from "@/components/Stepper";
+import TreeAccordion from "@/components/TreeAccordion";
 import ThemeToggle from "@/components/ThemeToggle";
 
 // Re-fetch from Google Sheets at most once per minute. This is a read-only
@@ -17,12 +18,16 @@ export default async function DashboardPage() {
     loadError = err instanceof Error ? err.message : "Unknown error loading dashboard data.";
   }
 
-  // The "current" phase for auto-expand: the first one not yet Complete, or
-  // the last phase if everything is done.
-  const activePhase =
-    data?.phases.find((p) => p.status !== "Complete") ?? data?.phases.at(-1);
-  // Log the data and active phase for debugging purposes. This will appear in the server logs.
-  console.log("Data loaded:", data, "Active phase:", activePhase);
+  // The "Project Phases" section is one combined stepper: the Intake
+  // Checklist root itself as the first step, followed by each phase (the
+  // "Project Phases" root's direct children) as the remaining steps. Any
+  // other top-level branch added to the sheet later still gets its own
+  // generic titled section below.
+  const intakeRoot = data?.roots.find((r) => r.title === INTAKE_ROOT_TITLE);
+  const phasesRoot = data?.roots.find((r) => r.title === PHASES_ROOT_TITLE);
+  const steps = [...(intakeRoot ? [intakeRoot] : []), ...(phasesRoot?.children ?? [])];
+  const otherRoots = data?.roots.filter((r) => r !== intakeRoot && r !== phasesRoot) ?? [];
+
   return (
     <main className="mx-auto min-h-screen max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
       <header className="mb-8 flex items-start justify-between gap-4">
@@ -51,23 +56,23 @@ export default async function DashboardPage() {
         </div>
       ) : (
         <>
-          <section className="mb-10 rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-            <h2 className="mb-6 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-              Milestones
-            </h2>
-            <MilestoneFlow
-              percentComplete={data!.percentComplete}
-              phases={data!.phases}
-              defaultOpenPhase={activePhase?.name}
-            />
-          </section>
+          {steps.length > 0 && (
+            <section className="mb-10 rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <h2 className="mb-6 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                {PHASES_ROOT_TITLE}
+              </h2>
+              <Stepper steps={steps} />
+            </section>
+          )}
 
-          <section className="mb-10">
-            <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-              Intake Checklist by Category
-            </h2>
-            <CategoryBreakdown categories={data!.categories} items={data!.items} />
-          </section>
+          {otherRoots.map((root) => (
+            <section key={root.id} className="mb-10">
+              <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                {root.title}
+              </h2>
+              <TreeAccordion nodes={root.children} />
+            </section>
+          ))}
 
           <footer className="text-xs text-slate-400 dark:text-slate-600">
             Last updated {new Date(data!.fetchedAt).toLocaleString()}
