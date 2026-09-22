@@ -9,7 +9,7 @@
 FROM node:20-alpine AS deps
 WORKDIR /app
 RUN corepack enable
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 FROM node:20-alpine AS builder
@@ -23,6 +23,13 @@ FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 nextjs
+
+# Purely for image provenance (visible via `docker inspect`) — CI passes
+# these; a local `docker build .` with no --build-arg just leaves them blank.
+ARG APP_VERSION=""
+ARG GIT_SHA=""
+LABEL org.opencontainers.image.version="$APP_VERSION" \
+      org.opencontainers.image.revision="$GIT_SHA"
 
 COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./

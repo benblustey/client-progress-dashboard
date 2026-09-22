@@ -4,9 +4,15 @@ import Stepper from "@/components/Stepper";
 import TreeAccordion from "@/components/TreeAccordion";
 import ThemeToggle from "@/components/ThemeToggle";
 
-// Re-fetch from Google Sheets at most once per minute. This is a read-only
-// dashboard, so we don't need every page load to hit the Sheets API.
-export const revalidate = 60;
+// Force this route to render per-request rather than being statically
+// pre-rendered at `next build` time. A build-time pre-render would run
+// getDashboardData() inside the Docker builder stage, where SPREADSHEET_ID
+// and the service-account credentials don't exist (correctly — secrets
+// shouldn't be build args), permanently baking a "missing env var" error
+// into the image regardless of what the container is actually started
+// with. The "don't hit the Sheets API on every page view" behavior lives in
+// lib/sheets.ts's own in-memory cache instead.
+export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
   let data;

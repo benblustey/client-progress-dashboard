@@ -6,5 +6,4 @@ out
 *.tsbuildinfo
 .DS_Store
 _tmp*
-*.json
 /temp

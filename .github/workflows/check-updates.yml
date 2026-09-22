@@ -1,0 +1,45 @@
+name: Check for Outdated Dependencies
+
+on:
+  schedule:
+    - cron: '0 5 * * 1'  # Every Monday at 5am UTC
+  workflow_dispatch:
+
+jobs:
+  check-updates:
+    name: Check dependencies
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PNPM
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Check for outdated dependencies
+        run: pnpm outdated || true
+
+      - name: Update within declared semver ranges
+        run: pnpm update
+
+      - name: Commit and create PR if updates found
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore(deps): update outdated dependencies"
+          title: "chore(deps): weekly dependency update"
+          body: |
+            This automated PR updates outdated dependencies.
+
+            Review the diff and CI results before merging — a dependency bump
+            isn't guaranteed to be safe just because it installs cleanly.
+          branch: "auto/dependency-updates"
+          delete-branch: true
