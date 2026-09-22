@@ -5,20 +5,37 @@
 # Uses pnpm (via corepack, bundled with Node 20+) to match the project's
 # pnpm-lock.yaml — installing with npm here would ignore that lockfile and
 # could resolve different dependency versions than what's tested locally.
+#
+# deps/builder deliberately run on --platform=$BUILDPLATFORM (the CI
+# runner's own architecture, amd64) even when the target image is
+# linux/arm64. `pnpm install` and `next build` are extremely slow — and
+# pnpm's worker-thread tarball extraction can outright hang — under QEMU
+# emulation, so cross-compiling here avoids emulating them at all. This is
+# safe because Next.js's standalone output traces only what the server
+# actually `require()`s at runtime; this app doesn't use next/image or any
+# other native-addon dependency, so nothing architecture-specific ends up in
+# `.next/standalone`. Only the final `runner` stage — which just copies that
+# plain-JS output into a base image and starts node — is built per target
+# platform.
+ARG BUILDPLATFORM
 
-FROM node:20-alpine AS deps
+FROM --platform=$BUILDPLATFORM node:20-alpine AS deps
 WORKDIR /app
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
-FROM node:20-alpine AS builder
+FROM --platform=$BUILDPLATFORM node:20-alpine AS builder
 WORKDIR /app
 RUN corepack enable
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN pnpm run build
 
+# No --platform pin here: this stage builds for whichever target platform
+# buildx is currently producing (each entry in `platforms:`), so the base
+# image and `node` binary match the architecture the image will actually run
+# on. It only copies the already-built plain-JS output from `builder`.
 FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
