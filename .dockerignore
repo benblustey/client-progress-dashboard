@@ -4,3 +4,11 @@ out
 .env
 .env.local
 .git
+.github
+
+# Defense-in-depth: never let a loose service-account key (or anything like
+# it) get baked into an image layer, even if it isn't gitignored correctly.
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json

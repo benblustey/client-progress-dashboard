@@ -50,18 +50,26 @@ one level inside a step — uses the generic tree view.
   Sheets API with a service account and reads the single "Project Tree" tab
   into flat rows. It looks for a header row containing `ID`/`ParentID`/`Title`/`Status`
   rather than hardcoded cell coordinates, so it keeps working even if rows are
-  added or reordered.
+  added or reordered. `getDashboardData()` also keeps a 60-second in-memory
+  cache so repeated page loads don't each hit the Sheets API — deliberately
+  a manual cache here rather than Next.js's route-level `revalidate`, since
+  that would statically pre-render the page at `next build` time (see
+  `app/page.tsx` below).
 - `lib/tree.ts` turns those flat rows into the actual node tree (`buildTree`)
   and computes each list node's rollup status (`computeRollup`). A row whose
   `ParentID` doesn't match any real row's `ID` — a typo, or two rows that
   point at each other — gets filed under a synthetic
   "⚠ Unlinked rows (check ParentID)" root instead of silently vanishing from
   the dashboard; check the server logs for which row and why.
-- `app/page.tsx` is a Server Component that calls `getDashboardData()` at
-  request time, cached for 60 seconds (`export const revalidate = 60`). It
-  builds the combined step list — `Intake Checklist` first, then each of
-  `Project Phases`'s children — and renders it with `Stepper`; any other root
-  gets its own titled section rendered with `TreeAccordion`.
+- `app/page.tsx` is a Server Component, marked `export const dynamic =
+  "force-dynamic"` so it always renders per-request rather than being
+  statically pre-rendered at `next build` time — a build-time pre-render
+  would run inside the Docker builder stage, where the Sheets credentials
+  don't exist, and would permanently bake a "missing env var" error into the
+  image. It calls `getDashboardData()`, builds the combined step list —
+  `Intake Checklist` first, then each of `Project Phases`'s children — and
+  renders it with `Stepper`; any other root gets its own titled section
+  rendered with `TreeAccordion`.
 - `components/Stepper.tsx` renders that step list twice, in sync: a
   horizontal connected-dot stepper on top, and a full row list of the same
   steps underneath — every step is always visible as a row, not just the

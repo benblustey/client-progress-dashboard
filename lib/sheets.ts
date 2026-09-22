@@ -132,7 +132,7 @@ function parseTreeRows(grid: Grid): TreeRow[] {
   return rows;
 }
 
-export async function getDashboardData(): Promise<DashboardData> {
+async function fetchDashboardData(): Promise<DashboardData> {
   const grid = await fetchSheetGrid(TREE_SHEET_NAME);
   const client = parseClientInfo(grid);
   const rows = parseTreeRows(grid);
@@ -143,4 +143,27 @@ export async function getDashboardData(): Promise<DashboardData> {
     roots,
     fetchedAt: new Date().toISOString(),
   };
+}
+
+// Manual in-memory cache, not Next.js's route-level `revalidate`. That route
+// cache would statically pre-render "/" at `next build` time — inside the
+// Docker builder stage, where SPREADSHEET_ID and the service-account
+// credentials don't exist — and permanently bake whatever error that
+// produces into the image. Caching here instead means the first real
+// request in a running container always hits the Sheets API fresh (with the
+// container's actual env vars), and only subsequent requests within the TTL
+// reuse that result. See the `dynamic = "force-dynamic"` export in
+// app/page.tsx, which is what stops the build-time pre-render from
+// happening in the first place — this cache is what keeps that from
+// meaning "hit the Sheets API on every single page view."
+const CACHE_TTL_MS = 60_000;
+let cache: { data: DashboardData; fetchedAt: number } | null = null;
+
+export async function getDashboardData(): Promise<DashboardData> {
+  if (cache && Date.now() - cache.fetchedAt < CACHE_TTL_MS) {
+    return cache.data;
+  }
+  const data = await fetchDashboardData();
+  cache = { data, fetchedAt: Date.now() };
+  return data;
 }

@@ -1,0 +1,151 @@
+name: Promote to Release Tag (manual)
+
+# Retags an already-built :sha-<short> image (from build-main.yml) as a real
+# semver version, then bumps, commits, and tags package.json to match — so
+# the version tag in the registry and the version in the repo stay in sync.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version tag to create (example: 0.2.0)"
+        required: true
+        type: string
+      source_sha:
+        description: "Short SHA used in the existing image tag (example: a1b2c3d). Promotes from :sha-<source_sha>"
+        required: true
+        type: string
+      tag_latest:
+        description: "Also tag :latest"
+        required: false
+        default: false
+        type: boolean
+      force:
+        description: "Overwrite if the version tag already exists / bypass safety checks (dangerous)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  IMAGE: ghcr.io/benblustey/client-progress-dashboard
+  NODE_VERSION: "20"
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Validate inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ inputs.version }}"
+          SOURCE_SHA="${{ inputs.source_sha }}"
+
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([\-+].+)?$ ]]; then
+            echo "Version must look like semver (e.g. 0.2.0). Got: $VERSION"
+            exit 1
+          fi
+
+          if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{7,40}$ ]]; then
+            echo "source_sha must be 7-40 hex chars. Got: $SOURCE_SHA"
+            exit 1
+          fi
+
+      - name: "Safety check: version should match next patch"
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          RELEASE_VERSION="$(node -p "require('./package.json').version")"
+          BASE_VERSION="${RELEASE_VERSION%%-*}"
+          EXPECTED_NEXT="$(node -e "const [a,b,c]=process.argv[1].split('.').map(Number); console.log([a,b,c+1].join('.'))" "$BASE_VERSION")"
+
+          TARGET_VERSION="${{ inputs.version }}"
+
+          if [[ "$TARGET_VERSION" != "$EXPECTED_NEXT" && "${{ inputs.force }}" != "true" ]]; then
+            echo "Refusing to promote: inputs.version=$TARGET_VERSION does not match expected next patch=$EXPECTED_NEXT (from package.json=$RELEASE_VERSION)."
+            echo "If intentional, re-run with force=true."
+            exit 1
+          fi
+
+          echo "OK: promoting version $TARGET_VERSION (expected next is $EXPECTED_NEXT)"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker-container
+          install: true
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check if target tag exists
+        id: exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET="${{ env.IMAGE }}:${{ inputs.version }}"
+          EXISTS=false
+          docker buildx imagetools inspect "$TARGET" >/dev/null 2>&1 && EXISTS=true || true
+          echo "exists=$EXISTS" >> "$GITHUB_OUTPUT"
+
+      - name: Stop if target exists (unless force=true)
+        if: steps.exists.outputs.exists == 'true' && inputs.force != true
+        shell: bash
+        run: |
+          echo "Tag ${{ inputs.version }} already exists for ${{ env.IMAGE }}. Re-run with force=true if you REALLY want to overwrite."
+          exit 1
+
+      - name: "Promote: retag image"
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC="${{ env.IMAGE }}:sha-${{ inputs.source_sha }}"
+          DEST="${{ env.IMAGE }}:${{ inputs.version }}"
+          echo "Promoting: $SRC -> $DEST"
+          docker buildx imagetools create -t "$DEST" "$SRC"
+          if [[ "${{ inputs.tag_latest }}" == "true" ]]; then
+            docker buildx imagetools create -t "${{ env.IMAGE }}:latest" "$SRC"
+          fi
+
+      - name: Bump, commit, and tag package.json version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '${{ inputs.version }}';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add package.json
+          git commit -m "chore(release): v${{ inputs.version }}"
+          git tag -a "v${{ inputs.version }}" -m "Release v${{ inputs.version }} (image sha-${{ inputs.source_sha }})"
+
+          git push origin HEAD:main
+          git push origin "v${{ inputs.version }}"
