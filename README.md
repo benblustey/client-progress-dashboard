@@ -137,7 +137,13 @@ built-in `next lint` command); `pnpm run build` does a production build.
 ## Deploying on Coolify
 
 This repo includes a `Dockerfile` (multi-stage, using Next.js's `standalone`
-output) that Coolify's Dockerfile build pack can use directly:
+output) that Coolify's Dockerfile build pack can use directly. `build-main.yml`
+builds and pushes it as a multi-arch image (`linux/amd64` + `linux/arm64`, via
+QEMU) on every push to `main`, so the same tags pull cleanly on both an amd64
+Coolify server and an Apple Silicon Mac for local testing. `promote.yml` just
+retags an existing `:sha-<short>` image (`docker buildx imagetools create`),
+so a promoted release tag carries over whichever platforms that source image
+was built with.
 
 1. In Coolify, create a new Application from this repository (or a git remote you
    push it to).
