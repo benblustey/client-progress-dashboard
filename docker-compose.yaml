@@ -1,0 +1,37 @@
+# Coolify deployment definition. Unlike the Dockerfile in this repo (used by
+# CI to build the image), Coolify does NOT build from source here — it pulls
+# the already-built, already-multi-arch image that build-main.yml pushes to
+# GHCR. Import this repo in Coolify with Build Pack = "Docker Compose".
+#
+# IMAGE_TAG lets you pin a specific promoted release (see
+# .github/workflows/promote.yml) instead of always tracking :latest — set it
+# under Coolify's Environment Variables, e.g. IMAGE_TAG=0.1.2.
+#
+# One Coolify application = one client = one Google Sheet. Repeat this whole
+# import (new app, new env vars, new service-account share) per client rather
+# than reusing this deployment, per the README's "One-time setup per client".
+
+services:
+  app:
+    image: ghcr.io/benblustey/client-progress-dashboard:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+
+    # SERVICE_FQDN_APP: Coolify generates/assigns this service's public
+    # domain (see Configuration > Domains in the Coolify UI once imported).
+    # Don't publish a host port with `ports:` — Coolify's proxy routes to
+    # this container's internal port 3000 based on that domain config.
+    environment:
+      - SERVICE_FQDN_APP
+      - SPREADSHEET_ID=${SPREADSHEET_ID:?Set this to the client's Google Sheet ID}
+      - TREE_SHEET_NAME=${TREE_SHEET_NAME:-Project Tree}
+      - GOOGLE_SERVICE_ACCOUNT_KEY_BASE64=${GOOGLE_SERVICE_ACCOUNT_KEY_BASE64:?Set this to the base64-encoded service-account JSON key}
+
+    expose:
+      - "3000"
+
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

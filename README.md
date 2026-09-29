@@ -136,24 +136,38 @@ built-in `next lint` command); `pnpm run build` does a production build.
 
 ## Deploying on Coolify
 
-This repo includes a `Dockerfile` (multi-stage, using Next.js's `standalone`
-output) that Coolify's Dockerfile build pack can use directly. `build-main.yml`
-builds and pushes it as a multi-arch image (`linux/amd64` + `linux/arm64`, via
-QEMU) on every push to `main`, so the same tags pull cleanly on both an amd64
-Coolify server and an Apple Silicon Mac for local testing. `promote.yml` just
-retags an existing `:sha-<short>` image (`docker buildx imagetools create`),
-so a promoted release tag carries over whichever platforms that source image
-was built with.
+Coolify does **not** build this app from source. `build-main.yml` builds the
+`Dockerfile` (multi-stage, Next.js `standalone` output) as a multi-arch image
+(`linux/amd64` + `linux/arm64`, via QEMU cross-compilation) and pushes it to
+GHCR on every push to `main`; `docker-compose.yaml` at the repo root just
+tells Coolify which pre-built image to pull and run. `promote.yml` retags an
+existing `:sha-<short>` image (`docker buildx imagetools create`) to a
+version tag like `:0.1.2` — point `IMAGE_TAG` at one of those for a pinned
+release instead of always tracking `:latest`.
 
-1. In Coolify, create a new Application from this repository (or a git remote you
-   push it to).
-2. Set the build pack to **Dockerfile**.
-3. Add the environment variables from `.env.example` in Coolify's Environment
-   Variables tab (don't commit `.env.local`).
-4. Deploy. The container listens on port 3000.
-5. Because this is one instance per client, repeat the whole flow (new Coolify
-   app, new `.env`, new service-account share) for each new client rather than
-   reusing the deployment.
+1. In Coolify, create a new Application from this repository (or a git remote
+   you push it to).
+2. Set the build pack to **Docker Compose**, with `docker-compose.yaml` as
+   the Docker Compose Location.
+3. Under Environment Variables, set `SPREADSHEET_ID` and
+   `GOOGLE_SERVICE_ACCOUNT_KEY_BASE64` (see `.env.example` for how to get
+   these), optionally `TREE_SHEET_NAME`, and optionally `IMAGE_TAG` to pin a
+   specific promoted release instead of `latest`.
+4. Under the app's Domains, assign a domain to the `app` service — Coolify
+   fills in `SERVICE_FQDN_APP` and routes to the container's port 3000
+   automatically; don't publish a host port.
+5. Deploy.
+6. For CI to trigger a deploy automatically after each push to `main`, add
+   `COOLIFY_WEBHOOK_URL` and `COOLIFY_API_TOKEN` as **GitHub** repo secrets
+   (Settings → Secrets and variables → Actions in this repo, not in Coolify).
+   Get the values from Coolify itself: the webhook URL is the app's
+   **Deploy Webhook** (Configuration → Webhooks, the "authenticated" one, not
+   the Git provider one — this app has no Git source to watch since it just
+   pulls a prebuilt image); the token is a Coolify **API token** with deploy
+   permission (your avatar menu → Keys & Tokens → API Tokens).
+7. Because this is one instance per client, repeat the whole flow (new
+   Coolify app, new env vars, new service-account share) for each new client
+   rather than reusing the deployment.
 
 ## Adding auth later (Pocket ID)
 
