@@ -4,6 +4,14 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Client Progress Dashboard",
   description: "Live project progress, powered by the onboarding checklist.",
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/favicon.svg", type: "image/svg+xml" },
+    ],
+    apple: "/apple-touch-icon.png",
+  },
+  manifest: "/site.webmanifest",
 };
 
 // Runs before paint to apply the saved theme (or system preference) and avoid
@@ -30,6 +38,7 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        <meta name="viewport" content="width=device-width" />
       </head>
       <body>{children}</body>
     </html>
