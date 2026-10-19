@@ -5,6 +5,7 @@ import type { TreeNode } from "@/lib/types";
 import { computeRollup } from "@/lib/tree";
 import { rollupBadgeClass, stepperDotClasses, stepperLineClasses } from "@/lib/statusColors";
 import { TreeLevel } from "./TreeAccordion";
+import { Check } from "lucide-react";
 
 interface StepperProps {
   // Any sequence of top-level nodes to show as connected steps — today
@@ -41,7 +42,7 @@ export default function Stepper({ steps }: StepperProps) {
 
   return (
     <div>
-      <div className="w-full overflow-x-auto pb-2">
+      <div className="w-full overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden pb-2">
         <div className="flex min-w-[720px] flex-col gap-0 md:min-w-0 md:flex-row md:items-start">
           {numberedSteps.map(({ step, number }, idx) => {
             const rollup = computeRollup(step);
@@ -62,7 +63,11 @@ export default function Stepper({ steps }: StepperProps) {
                     className={`flex h-10 w-10 items-center justify-center rounded-full border-4 text-sm font-semibold text-white ${stepperDotClasses[rollup.state]}`}
                     aria-hidden
                   >
-                    {rollup.state === "complete" ? "✓" : number}
+                    {rollup.state === "complete" ? (
+                      <Check className="h-5 w-5" aria-hidden />
+                    ) : (
+                      number
+                    )}
                   </div>
                   <div className="mt-2 text-sm font-semibold">{label}</div>
                   <span className={rollupBadgeClass(rollup.state)}>
